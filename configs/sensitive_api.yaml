@@ -1,0 +1,7 @@
+sensitive_api:
+  top_k: 500
+  representative_contexts_per_api: 3
+  llm_cache_dir: data/sensitive_api/llm_results
+  prompt_path: prompts/sensitive_api/paper_prompt.txt
+  # Current implementation computes the six paper centralities and uses the
+  # mean of the six corpus-averaged values as the ranking score.

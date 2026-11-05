@@ -1,0 +1,1165 @@
+Chốt lại, chúng ta sẽ build một **Lightweight MVRFDet reproduction**: giữ nguyên flow, static analysis, sensitive-API mechanism, feature-matrix generation và CNN/CAM của paper; chỉ thay các encoder nặng bằng feature engineering nhẹ hơn. Paper gốc xác định ba view `Vm`, `Vc`, `Vg`, sau đó căn chỉnh thành tensor `3×32×32` và classify bằng CNN + Channel Attention. fileciteturn0file0
+
+## 1. Kiến trúc cuối cùng
+
+```text id="22f5vm"
+                    ┌───────────────────────────────┐
+                    │ STAGE 0 - OFFLINE             │
+                    │ Sensitive API Knowledge Base  │
+                    └───────────────┬───────────────┘
+                                    │
+                                    ▼
+                       sensitive_apis.json
+                                    │
+                                    │
+                  ┌─────────────────┴─────────────────┐
+                  │        ONLINE PACKAGE FLOW        │
+                  └─────────────────┬─────────────────┘
+                                    │
+                              PyPI Package
+                                    │
+             ┌──────────────────────┼──────────────────────┐
+             │                      │                      │
+             ▼                      ▼                      ▼
+        Metadata View           Code View              Graph View
+             │                      │                      │
+          PKG-INFO                 Source                  Source
+             │                      │                      │
+           Regex                  Scalpel                 Scalpel
+             │                      │                      │
+        7 fields             API Call Graph          API Call Graph
+             │                      │                      │
+             │               Sensitive API match          │
+             │                      │                      │
+             │                suspicious APIs             │
+             │                      │                      │
+             │               code contexts                │
+             │                ≤4096 tokens                │
+             │                  /       \                  │
+             │                 /         \                 │
+             ▼                ▼           ▼                ▼
+      Static Metadata      AST + API      CFG       Graph statistics
+         Features           Features       │          API-CG features
+             │                │             │                │
+             │                │        CFG statistics       │
+             │                │             └──────┬─────────┘
+             ▼                ▼                    ▼
+         Vm [768]         Vc [768]             Vg [1024]
+             │                │                    │
+             └────────────────┼────────────────────┘
+                              ▼
+                    Feature Matrix Generation
+                              │
+                     pad / normalize
+                              │
+                         reshape 32×32
+                              │
+                              ▼
+                         [3,32,32]
+                              │
+                              ▼
+                        3-layer CNN
+                              │
+                              ▼
+                         [256,4,4]
+                              │
+                              ▼
+                     Channel Attention
+                              │
+                              ▼
+                       Classification MLP
+                              │
+                    ┌─────────┴─────────┐
+                    ▼                   ▼
+                  BENIGN             MALICIOUS
+```
+
+---
+
+# 2. Stage 0 — Offline Sensitive API generation
+
+Phần này vẫn gần paper nhất.
+
+Paper thực hiện sensitive-API extraction **offline trước quá trình detection**, bằng API call graph + 6 centrality metrics + Top-500 candidate APIs + LLM verification. fileciteturn0file0
+
+### 2.1 Input
+
+Tập:
+
+```text id="p4aefn"
+verified malicious packages
+```
+
+Không chạy bước này trên mỗi package cần detect.
+
+---
+
+### 2.2 API Call Graph
+
+Với từng malicious package:
+
+```text id="c5twf0"
+package source
+    ↓
+Scalpel
+    ↓
+API Call Graph
+```
+
+Chuẩn hóa output Scalpel thành representation nội bộ:
+
+```python id="q86leg"
+class APINode:
+    id
+    api_name
+    file
+    line
+    column
+
+class APICallGraph:
+    nodes
+    edges
+```
+
+---
+
+### 2.3 Tính 6 centrality metrics
+
+Giữ đúng paper:
+
+```text id="ec3k9k"
+Degree
+Closeness
+Harmonic
+Katz
+Eigenvector
+Betweenness
+```
+
+Paper cũng nói centrality values được cộng thêm `1` để tránh zero. fileciteturn0file0
+
+Module:
+
+```python id="vxbgwx"
+compute_centrality(graph)
+```
+
+---
+
+### 2.4 Aggregate theo API name
+
+Không ranking từng node riêng lẻ của một package.
+
+Ta gom:
+
+```text id="13nldb"
+socket.socket
+os.system
+subprocess.Popen
+...
+```
+
+trên toàn malicious corpus.
+
+```text id="ur65jm"
+same API name
+    ↓
+aggregate centralities
+    ↓
+average across malicious packages
+```
+
+Sau đó ranking.
+
+---
+
+### 2.5 Top-500
+
+```text id="2g86hb"
+all API candidates
+      ↓
+rank
+      ↓
+Top 500
+```
+
+Output:
+
+```text id="g3gp7h"
+candidates_top500.json
+```
+
+---
+
+### 2.6 Lấy representative contexts
+
+Với mỗi candidate API:
+
+```text id="9swpu2"
+candidate API
+    ↓
+find occurrences
+    ↓
+extract representative code contexts
+```
+
+Để LLM không chỉ nhìn tên API mà còn thấy cách API được sử dụng.
+
+---
+
+### 2.7 DeepSeek verification
+
+Ở đây chúng ta giữ:
+
+```text id="7a5fkv"
+Prompt = prompt gốc của tác giả
+Model  = DeepSeek V4 Pro
+```
+
+Paper dùng DeepSeek-R1 + GPT-5, vì vậy đây là một khác biệt của reproduction. fileciteturn0file0
+
+Flow:
+
+```text id="63a9vu"
+Top-500 candidate
+      ↓
+author prompt
+      ↓
+DeepSeek V4 Pro
+      ↓
+sensitive / non-sensitive
+```
+
+Không ép kết quả phải đúng `293`, vì model verification của chúng ta khác paper.
+
+Output cuối:
+
+```text id="rsvds3"
+sensitive_apis.json
+```
+
+Ví dụ:
+
+```json id="krwn0c"
+{
+  "version": "v1",
+  "source": "centrality+deepseek",
+  "apis": [
+    "socket.socket",
+    "os.system",
+    "subprocess.Popen"
+  ]
+}
+```
+
+Tất cả response LLM phải cache.
+
+---
+
+# 3. Stage 1A — Metadata View
+
+Paper chọn đúng 7 fields:
+
+```text id="gtnuij"
+Name
+Summary
+Home-page
+Author
+Author-Email
+License
+Description
+```
+
+fileciteturn0file0
+
+Chúng ta giữ 7 fields này.
+
+### 3.1 Parse
+
+```text id="pb1646"
+PKG-INFO
+   ↓
+regex/parser
+   ↓
+dict
+```
+
+```python id="89gi9k"
+{
+    "Name": ...,
+    "Summary": ...,
+    "Home-page": ...,
+    "Author": ...,
+    "Author-Email": ...,
+    "License": ...,
+    "Description": ...
+}
+```
+
+Regex ở đây thay **metadata extraction mechanism**, không tự tạo được vector 768 chiều.
+
+---
+
+### 3.2 Static metadata encoding
+
+Thay:
+
+```text id="24mt1t"
+all-mpnet-base-v2
+```
+
+bằng:
+
+```text id="7wfshi"
+handcrafted metadata features
++
+hashed text features
+```
+
+Ví dụ handcrafted:
+
+```text id="pcn11b"
+has_author
+has_email
+has_homepage
+has_license
+has_description
+
+name_length
+summary_length
+description_length
+
+valid_email
+valid_url
+github_url
+known_license
+
+digit_ratio
+special_char_ratio
+unique_word_ratio
+...
+```
+
+Text:
+
+```text id="fm1njt"
+Name
+Summary
+Description
+Author
+License
+```
+
+có thể encode bằng:
+
+```text id="fa3387"
+HashingVectorizer
+```
+
+Cuối cùng fixed-size:
+
+```text id="pl9ugm"
+Vm ∈ R^768
+```
+
+Contract:
+
+```python id="19slx5"
+assert Vm.shape == (768,)
+```
+
+---
+
+# 4. Stage 1B — Shared suspicious API localization
+
+Code view và Graph view dùng chung bước này.
+
+```text id="zz15og"
+New Package
+     ↓
+Scalpel
+     ↓
+API Call Graph
+     ↓
+load sensitive_apis.json
+     ↓
+match API names
+     ↓
+Suspicious API occurrences
+```
+
+Ví dụ:
+
+```text id="xwx7mh"
+Sensitive knowledge:
+    os.system
+
+Package:
+    foo.py:103 → os.system(...)
+
+=> suspicious occurrence
+```
+
+Không chạy centrality/DeepSeek lại khi detect package.
+
+---
+
+# 5. Stage 1C — Code Context View
+
+Paper lấy context tối đa `4096 tokens` centered quanh suspicious API. Nếu chạm boundary thì phần token budget còn lại được chuyển sang phía còn lại; overlapping contexts vẫn được extract độc lập và identical snippets được deduplicate. fileciteturn0file0
+
+Giữ cơ chế đó.
+
+```text id="zem2so"
+Suspicious API
+      ↓
+locate source
+      ↓
+≤4096-token window
+      ↓
+CodeContextSnippet
+```
+
+---
+
+# 6. Code representation — AST + API Feature
+
+Đây là phần thay LongCoder.
+
+Paper:
+
+```text id="unk26l"
+context
+ ↓
+LongCoder
+ ↓
+768-D
+```
+
+Chúng ta:
+
+```text id="1n45pq"
+context
+   ↓
+Python AST
+   +
+API extraction
+   +
+token statistics
+   ↓
+static vector
+   ↓
+Vc_snippet [768]
+```
+
+### AST feature
+
+Đếm:
+
+```text id="9k25gg"
+Call
+Import
+ImportFrom
+FunctionDef
+Assign
+Attribute
+If
+For
+While
+Try
+Raise
+Lambda
+Subscript
+Constant
+...
+```
+
+Cùng các structural metrics:
+
+```text id="bgp2if"
+AST node count
+AST depth
+call count
+branch count
+loop count
+exception count
+function count
+cyclomatic-like complexity
+```
+
+### API features
+
+Categories:
+
+```text id="xwczn5"
+network
+filesystem
+process
+shell
+dynamic_execution
+encoding
+serialization
+environment
+credentials
+system_information
+```
+
+Ngoài category còn hash API names:
+
+```text id="gmsclo"
+socket.socket
+os.system
+subprocess.Popen
+exec
+eval
+...
+```
+
+Cuối cùng:
+
+```text id="umqc7h"
+AST features
++
+API features
++
+hashed token/API representation
+        ↓
+Vc_snippet [768]
+```
+
+---
+
+# 7. Package-level Code Feature
+
+Nếu package có nhiều suspicious APIs:
+
+```text id="0xzai3"
+snippet1 → v1 [768]
+snippet2 → v2 [768]
+snippet3 → v3 [768]
+```
+
+Giữ mean pooling giống paper:
+
+\[
+V_c=\frac{1}{N}\sum_i v_i
+\]
+
+fileciteturn0file0
+
+Output:
+
+```text id="osb42m"
+Vc [768]
+```
+
+---
+
+# 8. Stage 1D — Graph View
+
+Giữ **hai graph khác nhau** giống paper:
+
+```text id="6y83gs"
+Global:
+API Call Graph
+
+Local:
+CFG of suspicious contexts
+```
+
+CFG không convert từ API Call Graph.
+
+```text id="lqilrz"
+code context
+    ↓
+Scalpel
+    ↓
+CFG
+```
+
+fileciteturn0file0
+
+---
+
+# 9. Graph representation — Statistical Graph Encoder
+
+Thay:
+
+```text id="tmzbdm"
+4-layer GAT
+```
+
+bằng static graph features.
+
+### API Call Graph feature
+
+Ví dụ:
+
+```text id="6q4obt"
+number of nodes
+number of edges
+density
+
+in/out degree statistics
+
+connected components
+strongly connected components
+
+degree centrality statistics
+closeness statistics
+harmonic statistics
+Katz statistics
+eigenvector statistics
+betweenness statistics
+
+sensitive API count
+sensitive API ratio
+sensitive→sensitive edges
+sensitive category histogram
+
+cycle statistics
+path statistics
+```
+
+Encode/project thành:
+
+```text id="xg8vz4"
+Gcg [512]
+```
+
+---
+
+### CFG feature
+
+Ví dụ:
+
+```text id="ph6a9n"
+node count
+edge count
+
+entry nodes
+exit nodes
+
+branch nodes
+merge nodes
+loop count
+
+connected components
+
+degree statistics
+centrality statistics
+
+cyclomatic complexity
+path statistics
+```
+
+Output:
+
+```text id="5q92ep"
+Gcfg [512]
+```
+
+---
+
+# 10. Graph fusion
+
+Paper dùng Selection Feature Fusion; lightweight version thay bằng:
+
+```python id="g82neb"
+Vg = concatenate(Gcg, Gcfg)
+```
+
+Do:
+
+```text id="19by3d"
+Gcg  = 512
+Gcfg = 512
+```
+
+nên:
+
+```text id="j4r6b7"
+Vg = 1024
+```
+
+Contract:
+
+```python id="86j46y"
+assert Vg.shape == (1024,)
+```
+
+---
+
+# 11. Output contract của Stage 1
+
+Stage 1 kết thúc bằng:
+
+```python id="9597ex"
+@dataclass
+class MultiViewFeatures:
+    metadata: Tensor   # [768]
+    code: Tensor       # [768]
+    graph: Tensor      # [1024]
+```
+
+tức:
+
+```text id="s3rdh9"
+Vm [768]
+Vc [768]
+Vg [1024]
+```
+
+Đây là boundary rất quan trọng.
+
+Stage 2 không quan tâm chúng được tạo bằng transformer hay static analysis.
+
+---
+
+# 12. Stage 2 — Feature Matrix Generation
+
+Phần này giữ **nguyên paper**.
+
+### Step 1 — Pad
+
+```text id="2fzj3b"
+Vm 768  → zero-pad → 1024
+Vc 768  → zero-pad → 1024
+Vg 1024 → unchanged
+```
+
+---
+
+### Step 2 — L2 normalize từng view
+
+\[
+\hat V_i=
+\frac{V_i}{\|V_i\|_2+\epsilon}
+\]
+
+fileciteturn0file0
+
+---
+
+### Step 3 — reshape
+
+```text id="2l0jei"
+1024 = 32 × 32
+```
+
+nên:
+
+```text id="b3n9ci"
+Vm → [32,32]
+Vc → [32,32]
+Vg → [32,32]
+```
+
+---
+
+### Step 4 — Stack
+
+```python id="6yb4k0"
+F = torch.stack([
+    metadata_matrix,
+    code_matrix,
+    graph_matrix
+])
+```
+
+Output:
+
+```text id="1abo9s"
+F.shape = [3,32,32]
+```
+
+Không sinh PNG/JPG.
+
+---
+
+# 13. Stage 3 — CNN
+
+Phần này cũng giữ paper.
+
+```text id="v2negp"
+Input [3,32,32]
+
+Conv 3→64
+      ↓
+MaxPool
+      ↓
+[64,16,16]
+
+Conv 64→128
+      ↓
+MaxPool
+      ↓
+[128,8,8]
+
+Conv 128→256
+      ↓
+MaxPool
+      ↓
+[256,4,4]
+```
+
+Paper chọn 3 convolutional layers và sensitivity analysis cũng cho thấy cấu hình này tốt nhất trong experiments của authors. fileciteturn0file0
+
+---
+
+# 14. Channel Attention Module
+
+Giữ nguyên:
+
+```text id="3axyt2"
+F' [256,4,4]
+      │
+      ├──── Average Pool ──► [256]
+      │
+      └──── Max Pool ──────► [256]
+                                │
+                        Shared MLP
+                        256→16→256
+                                │
+                          elementwise +
+                                │
+                             sigmoid
+                                │
+                                ▼
+                             M [256]
+```
+
+Sau đó:
+
+```text id="10xezp"
+F_weighted = F' ⊗ M
+```
+
+broadcast:
+
+```text id="voh48g"
+M [256,1,1]
+```
+
+fileciteturn0file0
+
+---
+
+# 15. Classifier
+
+```text id="5mcmt3"
+F_weighted
+[256,4,4]
+     ↓
+flatten
+     ↓
+4096
+     ↓
+Linear
+4096 → 4096
+     ↓
+ReLU
+     ↓
+Linear
+4096 → 2
+     ↓
+logits
+```
+
+Output:
+
+```text id="vcp5l0"
+class 0 → benign
+class 1 → malicious
+```
+
+Training:
+
+```python id="bs26aa"
+CrossEntropyLoss
+```
+
+Inference:
+
+```python id="d8umz2"
+probabilities = softmax(logits)
+prediction = argmax(logits)
+```
+
+---
+
+# 16. Training
+
+Training chính chỉ còn:
+
+```text id="6g3kq7"
+CNN
+CAM
+Classification MLP
+```
+
+Nếu graph feature generation hoàn toàn static thì không có GAT cần train.
+
+Paper dùng:
+
+```text id="xu9m6a"
+Adam
+lr = 2e-5
+batch_size = 8
+epochs = 100
+CrossEntropy
+```
+
+fileciteturn0file0
+
+Ta có thể dùng config này làm starting point, nhưng do representation của chúng ta đã thay đổi khá nhiều nên **không nên giả định hyperparameter tối ưu của paper cũng tối ưu cho lightweight version**.
+
+Nên:
+
+```yaml id="yi8bh8"
+training:
+  optimizer: Adam
+  learning_rate: 2e-5
+  batch_size: 8
+  epochs: 100
+```
+
+làm baseline reproduction.
+
+Sau đó tune nếu cần.
+
+---
+
+# 17. Cache pipeline
+
+Tôi khuyên cache ở mọi boundary nặng.
+
+```text id="8pojgm"
+cache/
+├── api_call_graphs/
+├── cfgs/
+├── contexts/
+├── metadata_features/
+├── code_features/
+├── graph_features/
+└── matrices/
+```
+
+Ví dụ:
+
+```text id="rgtol5"
+package
+ ↓
+Vm.pt
+Vc.pt
+Vg.pt
+```
+
+Sau đó training classifier chỉ load:
+
+```text id="3awhrq"
+Vm/Vc/Vg
+ ↓
+Matrix
+ ↓
+CNN
+```
+
+Không phải chạy Scalpel lại mỗi epoch.
+
+---
+
+# 18. Cấu trúc source cuối cùng
+
+```text id="6czbil"
+MVRFDet/
+│
+├── configs/
+│   ├── feature.yaml
+│   ├── sensitive_api.yaml
+│   └── training.yaml
+│
+├── prompts/
+│   └── sensitive_api/
+│       └── paper_prompt.txt
+│
+├── data/
+│   ├── packages/
+│   ├── cache/
+│   └── sensitive_api/
+│       ├── candidates_top500.json
+│       ├── llm_results/
+│       └── sensitive_apis.json
+│
+├── src/
+│
+│   ├── core/
+│   │   ├── types.py
+│   │   └── constants.py
+│
+│   ├── offline/
+│   │   └── sensitive_api/
+│   │       ├── centrality.py
+│   │       ├── aggregate.py
+│   │       ├── ranking.py
+│   │       ├── context.py
+│   │       ├── deepseek.py
+│   │       └── builder.py
+│   │
+│   ├── static_analysis/
+│   │   ├── scalpel_adapter.py
+│   │   ├── api_call_graph.py
+│   │   └── cfg.py
+│   │
+│   ├── stage1/
+│   │   ├── metadata/
+│   │   │   ├── parser.py
+│   │   │   ├── features.py
+│   │   │   └── encoder.py
+│   │   │
+│   │   ├── suspicious_api/
+│   │   │   └── locator.py
+│   │   │
+│   │   ├── code/
+│   │   │   ├── context.py
+│   │   │   ├── ast_features.py
+│   │   │   ├── api_features.py
+│   │   │   └── encoder.py
+│   │   │
+│   │   └── graph/
+│   │       ├── api_graph_features.py
+│   │       ├── cfg_features.py
+│   │       ├── encoder.py
+│   │       └── fusion.py
+│   │
+│   ├── stage2/
+│   │   └── feature_matrix.py
+│   │
+│   ├── stage3/
+│   │   ├── cnn.py
+│   │   ├── channel_attention.py
+│   │   ├── classifier.py
+│   │   └── model.py
+│   │
+│   └── pipeline.py
+│
+├── scripts/
+│   ├── build_sensitive_api_list.py
+│   ├── extract_features.py
+│   ├── train.py
+│   ├── evaluate.py
+│   └── predict.py
+│
+└── tests/
+```
+
+---
+
+# 19. Thứ tự tôi sẽ thực sự code
+
+Không code theo thứ tự paper mà theo dependency:
+
+```text id="ne5sdt"
+MILESTONE 1
+Core types + config
+        ↓
+PKG-INFO parser
+        ↓
+Metadata static feature
+
+MILESTONE 2
+Scalpel adapter
+        ↓
+API Call Graph
+        ↓
+Sensitive API matcher
+
+MILESTONE 3
+Context extractor
+        ↓
+AST features
+        ↓
+API features
+        ↓
+Vc [768]
+
+MILESTONE 4
+Graph statistics
+        ↓
+Gcg [512]
+Gcfg [512]
+        ↓
+Vg [1024]
+
+MILESTONE 5
+Vm/Vc/Vg contracts
+        ↓
+FeatureMatrixGenerator
+        ↓
+[3,32,32]
+
+MILESTONE 6
+CNN
+ ↓
+CAM
+ ↓
+Classifier
+ ↓
+logits[2]
+
+MILESTONE 7
+Training / evaluation
+        ↓
+checkpoint
+
+MILESTONE 8
+Offline centrality
+        ↓
+Top-500
+        ↓
+DeepSeek + paper prompt
+        ↓
+sensitive_apis.json
+```
+
+Tôi để Stage 0 LLM hơi sau trong **development order** vì trong lúc code có thể dùng một fixture nhỏ:
+
+```json id="9d6ffg"
+[
+  "os.system",
+  "subprocess.Popen",
+  "socket.socket"
+]
+```
+
+để test toàn bộ online framework trước. Khi mọi thứ chạy end-to-end mới chạy pipeline Top-500 + DeepSeek thật, tránh tốn API call trong giai đoạn debug.
+
+---
+
+## Những gì chúng ta giữ và thay
+
+| Thành phần | Paper | Bản build |
+|---|---|---|
+| 7 metadata fields | ✓ | **Giữ** |
+| all-mpnet-base-v2 | ✓ | **Thay static/hash features** |
+| Scalpel API CG | ✓ | **Giữ** |
+| 6 centralities | ✓ | **Giữ** |
+| Top-500 candidate | ✓ | **Giữ** |
+| Author prompt | ✓ | **Giữ** |
+| LLM verification | DeepSeek-R1 + GPT-5 | **DeepSeek V4 Pro** |
+| 4096-token context | ✓ | **Giữ** |
+| LongCoder | ✓ | **Thay AST + API features** |
+| CFG | ✓ | **Giữ** |
+| 4-layer GAT | ✓ | **Thay graph statistics** |
+| SFF | ✓ | **Thay concat** |
+| `Vm=768` | ✓ | **Giữ contract** |
+| `Vc=768` | ✓ | **Giữ contract** |
+| `Vg=1024` | ✓ | **Giữ contract** |
+| `3×32×32` matrix | ✓ | **Giữ nguyên** |
+| CNN | ✓ | **Giữ nguyên** |
+| CAM | ✓ | **Giữ nguyên** |
+| MLP classifier | ✓ | **Giữ nguyên** |
+
+Vậy tên kỹ thuật chính xác cho thứ chúng ta đang xây nên là **“Lightweight reproduction/variant of MVRFDet”**. Kiến trúc multi-view và detection flow vẫn dựa trên Methodology của MVRFDet, nhưng ba neural representation encoders nặng đã được thay bằng static feature engineering để framework có thể chạy trên phần cứng hạn chế. fileciteturn0file0
+
+Ở thời điểm này, specification đã đủ rõ để bắt đầu implementation; phần tôi sẽ khóa đầu tiên là **data contract `Vm[768] / Vc[768] / Vg[1024]`**, vì miễn ba contract này được giữ ổn định, bạn có thể thay encoder phía trước về sau mà không phải sửa Stage 2/3.

@@ -1,0 +1,12 @@
+[
+  "os.system",
+  "subprocess.Popen",
+  "subprocess.run",
+  "subprocess.call",
+  "socket.socket",
+  "socket.connect",
+  "os.dup2",
+  "pty.spawn",
+  "eval",
+  "exec"
+]

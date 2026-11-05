@@ -1,0 +1,26 @@
+# MVRFDet-Lightweight runtime/dev dependencies
+# Target interpreter: CPython 3.10.x
+#
+# IMPORTANT: Scalpel is intentionally NOT installed from this file.
+# Install it separately from the official SMAT-Lab GitHub repository:
+#   python -m pip install "git+https://github.com/SMAT-Lab/Scalpel.git"
+# This keeps the Scalpel source explicit and under the user's control.
+
+# Packaging/runtime compatibility
+# Scalpel currently relies on pkg_resources in its call-graph stack, so keep
+# setuptools on a compatible release inside the isolated Python 3.10 venv.
+setuptools==80.10.2
+packaging>=23.2,<26
+
+# Graph tooling
+graphviz~=0.17.0
+networkx==2.8.8
+
+# Lightweight MVRFDet feature/model stack
+numpy==1.26.4
+scikit-learn==1.4.2
+torch>=2.2,<3.0
+PyYAML>=6.0,<7.0
+
+# Tests
+pytest>=8.0,<9.0

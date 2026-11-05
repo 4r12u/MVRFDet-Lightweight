@@ -1,0 +1,22 @@
+metadata:
+  dimension: 768
+  handcrafted_dimension: 32
+  hashed_dimension: 736
+
+code:
+  dimension: 768
+  ast_dimension: 256
+  api_dimension: 256
+  token_dimension: 256
+  max_context_tokens: 4096
+
+graph:
+  api_graph_dimension: 512
+  cfg_dimension: 512
+  fused_dimension: 1024
+
+matrix:
+  aligned_dimension: 1024
+  height: 32
+  width: 32
+  epsilon: 1.0e-12

@@ -1,0 +1,12 @@
+{
+  "version": "development-fixture",
+  "source": "fixture-only-not-paper-list",
+  "apis": [
+    "os.system",
+    "subprocess.Popen",
+    "socket.socket",
+    "socket.connect",
+    "eval",
+    "exec"
+  ]
+}

@@ -1,0 +1,12 @@
+setuptools==80.10.2
+packaging<26,>=23.2
+python-scalpel==1.0b0
+graphviz~=0.17.0
+networkx==2.8.8
+numpy==1.26.4
+scikit-learn==1.4.2
+torch<3.0,>=2.2
+PyYAML<7.0,>=6.0
+
+[dev]
+pytest>=8.0

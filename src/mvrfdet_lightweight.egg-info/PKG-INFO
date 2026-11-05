@@ -1,0 +1,16 @@
+Metadata-Version: 2.4
+Name: mvrfdet-lightweight
+Version: 0.2.0
+Summary: Lightweight reproduction/variant of MVRFDet for PyPI malicious package detection
+Requires-Python: >=3.10
+Requires-Dist: setuptools==80.10.2
+Requires-Dist: packaging<26,>=23.2
+Requires-Dist: python-scalpel==1.0b0
+Requires-Dist: graphviz~=0.17.0
+Requires-Dist: networkx==2.8.8
+Requires-Dist: numpy==1.26.4
+Requires-Dist: scikit-learn==1.4.2
+Requires-Dist: torch<3.0,>=2.2
+Requires-Dist: PyYAML<7.0,>=6.0
+Provides-Extra: dev
+Requires-Dist: pytest>=8.0; extra == "dev"

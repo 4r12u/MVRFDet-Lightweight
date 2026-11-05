@@ -1,0 +1,11 @@
+# Tested with CPython 3.10.21 on Windows.
+# Install with: python -m pip install -r requirements-windows.txt
+-r requirements.txt
+
+# Scalpel from PyPI, as requested.
+python-scalpel==1.0b0
+# PyCG 0.0.8 packages PyCG/ but Scalpel imports lowercase pycg.
+pycg==0.0.6
+# Torch 2.14.0 failed DLL initialization after NumPy/scikit-learn imports
+# in this Windows environment; 2.5.1 passes the pipeline/model tests.
+torch==2.5.1

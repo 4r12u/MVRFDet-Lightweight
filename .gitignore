@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+.venv-scalpel/
+.env
+*.pt
+*.pth
+*.ckpt
+data/cache/
+data/sensitive_api/llm_results/
+official_dataset/
