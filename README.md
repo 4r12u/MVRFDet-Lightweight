@@ -1,4 +1,4 @@
-# MVRFDet-Lightweight
+# MVRFDet-Reproduce
 
 A runnable **lightweight reproduction/variant of MVRFDet** for PyPI malicious-package detection. It preserves the three-view pipeline, offline sensitive-API workflow, feature-matrix construction, CNN, channel attention, and binary classifier while replacing the heaviest representation models with static features.
 
